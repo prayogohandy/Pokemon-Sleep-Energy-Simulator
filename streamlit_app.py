@@ -457,7 +457,7 @@ if not st.session_state.history.empty:
 
 
             st.markdown(f"""
-            **Pokemon:**{pokemon_name} | **Level:** {active_row['_level']} | **Nature:** {up_text} / {down_text} | **Subskills:** {sub_text}
+            **Pokemon:** {pokemon_name} | **Level:** {active_row['_level']} | **Nature:** {up_text} / {down_text} | **Subskills:** {sub_text}
             """)
 
             col1, col2 = st.columns([1, 1])
