@@ -153,10 +153,10 @@ class PokemonSleepSimulator:
 
     @staticmethod
     def get_speed_multiplier(energy):
-        if energy >= 81: return 0.45
-        elif energy >= 61: return 0.52
-        elif energy >= 41: return 0.62
-        elif energy >= 21: return 0.71
+        if energy >= 80: return 0.45
+        elif energy >= 60: return 0.52
+        elif energy >= 40: return 0.58
+        elif energy >= 1: return 0.66
         else: return 1.00
 
     def simulate_day(self, start_energy, start_pity, checkpoint_interval=10, record_trace=True):
