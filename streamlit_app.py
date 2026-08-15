@@ -245,18 +245,48 @@ def render_energy_percentile_chart(run_id, log):
         annotation_position="top",
     )
 
-    fig.update_layout(
-        xaxis=dict(title="Hours Elapsed", dtick=2),
-        yaxis=dict(title="Energy"),
-        legend_title_text="",
-        legend=dict(
-                    orientation="h",   # Make the legend horizontal
-                    yanchor="top",     # Anchor the top of the legend box
-                    y=-0.2,            # Push it below the x-axis (0 is the bottom of the chart)
-                    xanchor="center",  # Anchor the middle of the legend box
-                    x=0.5              # Center it horizontally
-                )
-    )
+    # Transparent threshold bands with multiplier-only labels
+    threshold_bands = [
+        (81, 150, "2.22x", "rgba(255, 99, 132, 0.10)"),
+        (61, 80,  "1.92x", "rgba(255, 159, 64, 0.10)"),
+        (41, 60,  "1.61x", "rgba(255, 205, 86, 0.10)"),
+        (21, 40,  "1.41x", "rgba(75, 192, 192, 0.10)"),
+        (1,  20,  "1.25x", "rgba(54, 162, 235, 0.10)"),
+    ]
+
+    x_min = float(hours.min())
+    x_max = float(hours.max())
+    x_mid = (x_min + x_max) / 2
+
+    for y0, y1, label, color in threshold_bands:
+        # band
+        fig.add_hrect(
+            y0=y0, y1=y1,
+            fillcolor=color,
+            line_width=0,
+            layer="below",
+        )
+        # centered label in band
+        fig.add_annotation(
+            x=x_mid,
+            y=(y0 + y1) / 2,
+            text=label,
+            showarrow=False,
+            font=dict(size=11, color="rgba(80,80,80,0.9)"),
+        )
+
+        fig.update_layout(
+            xaxis=dict(title="Hours Elapsed", dtick=2),
+            yaxis=dict(title="Energy"),
+            legend_title_text="",
+            legend=dict(
+                        orientation="h",   # Make the legend horizontal
+                        yanchor="top",     # Anchor the top of the legend box
+                        y=-0.3,            # Push it below the x-axis (0 is the bottom of the chart)
+                        xanchor="center",  # Anchor the middle of the legend box
+                        x=0.5              # Center it horizontally
+                    )
+        )
     st.plotly_chart(fig, key=f"energy_pct_{run_id}")
 
 
@@ -798,10 +828,7 @@ if not st.session_state.history.empty:
 
     elif main_view == "🔀 Compare Runs":
         st.subheader("Efficiency vs. Skill Triggers — All Saved Runs")
-        st.markdown(
-            "Each point is one saved run, averaged across its simulated days. "
-            "Fitted lines show the trend across runs for awake/sleep/daily efficiency."
-        )
+        st.markdown("Each point is one saved run, averaged across its simulated days. ")
 
         EFFICIENCY_METRICS = ["awake_efficiency", "sleep_efficiency", "daily_efficiency"]
         METRIC_COLORS = {
@@ -914,19 +941,17 @@ if not st.session_state.history.empty:
                     )
 
             fig.update_layout(
-                title="Efficiency vs. Total Skill Triggers",
                 xaxis=dict(title=METRIC_LABELS.get("total_triggers", "Total Skill Triggers")),
                 yaxis=dict(title="Efficiency"),
                 legend_title_text="Metric (click to hide/show)",
-                margin=dict(r=140),
                 legend=dict(
                     orientation="h",   # Make the legend horizontal
                     yanchor="top",     # Anchor the top of the legend box
-                    y=-0.2,            # Push it below the x-axis (0 is the bottom of the chart)
+                    y=-0.3,            # Push it below the x-axis (0 is the bottom of the chart)
                     xanchor="center",  # Anchor the middle of the legend box
                     x=0.5              # Center it horizontally
                 )
             )
-            st.plotly_chart(fig, key="compare_efficiency_vs_triggers")
+            st.plotly_chart(fig, key="compare_efficiency_vs_triggers", width="stretch")
 else:
     st.info("No simulations run yet. Use the sidebar settings and click 'Run' to start!")
