@@ -275,18 +275,18 @@ def render_energy_percentile_chart(run_id, log):
             font=dict(size=11, color="rgba(80,80,80,0.9)"),
         )
 
-        fig.update_layout(
-            xaxis=dict(title="Hours Elapsed", dtick=2),
-            yaxis=dict(title="Energy"),
-            legend_title_text="",
-            legend=dict(
-                        orientation="h",   # Make the legend horizontal
-                        yanchor="top",     # Anchor the top of the legend box
-                        y=-0.3,            # Push it below the x-axis (0 is the bottom of the chart)
-                        xanchor="center",  # Anchor the middle of the legend box
-                        x=0.5              # Center it horizontally
-                    )
-        )
+    fig.update_layout(
+        xaxis=dict(title="Hours Elapsed", dtick=2),
+        yaxis=dict(title="Energy"),
+        legend_title_text="",
+        legend=dict(
+                    orientation="h",   # Make the legend horizontal
+                    yanchor="top",     # Anchor the top of the legend box
+                    y=-0.3,            # Push it below the x-axis (0 is the bottom of the chart)
+                    xanchor="center",  # Anchor the middle of the legend box
+                    x=0.5              # Center it horizontally
+                )
+    )
     st.plotly_chart(fig, key=f"energy_pct_{run_id}")
 
 
@@ -356,7 +356,7 @@ def append_run_result(
         "Pokémon": pokemon_name,
         "Level": level,
         "Subskills": ", ".join(subskills) if subskills else "None",
-        "Nature": ", ".join(nature_list) if nature_list else "None",
+        "Nature": ", ".join(nature_list) if nature_list else "Neutral",
         "Extra HB": extra_hb,
         "Mean Triggers": round(df["total_triggers"].mean(), 2),
         "Awake Eff": round(df["awake_efficiency"].mean(), 2),
@@ -411,8 +411,7 @@ def run_randomized_batch(
         subs = sample_subskills_for_level(lvl, allowed_subskills)
 
         up = random.choice(allowed_nature_up) if allowed_nature_up else None
-        down_pool = [x for x in allowed_nature_down if x != up] if up else allowed_nature_down
-        down = random.choice(down_pool) if down_pool else None
+        down = random.choice(allowed_nature_down) if allowed_nature_down else None
 
         df, log = simulate_once(
             pokemon_name=pokemon_choice,
@@ -952,6 +951,6 @@ if not st.session_state.history.empty:
                     x=0.5              # Center it horizontally
                 )
             )
-            st.plotly_chart(fig, key="compare_efficiency_vs_triggers", width="stretch")
+            st.plotly_chart(fig, key="compare_efficiency_vs_triggers")
 else:
     st.info("No simulations run yet. Use the sidebar settings and click 'Run' to start!")
