@@ -189,7 +189,6 @@ class PokemonSleepSimulator:
                     or None if `record_trace` was False.
         """
         energy = start_energy
-        help_progress = 0.0
         inventory = 0
         hit_cap_minute = np.inf
 
@@ -202,19 +201,18 @@ class PokemonSleepSimulator:
         energy_trace = [energy] if record_trace else None
         checkpoint_minutes = [0] if record_trace else None
 
+        # Scheduled-event model: schedule the first help based on starting energy.
+        multiplier = self.get_speed_multiplier(energy)
+        next_help_minute = self.final_freq * multiplier
+
         for minute in range(self.total_mins):
             is_awake = minute < self.awake_mins
 
             if minute == self.awake_mins:
                 inventory = 0
 
-            multiplier = self.get_speed_multiplier(energy)
-            actual_freq = self.final_freq * multiplier
-            help_progress += 1.0 / actual_freq
-
-            if help_progress >= 1.0:
-                help_progress -= 1.0
-
+            while minute >= next_help_minute:
+                # A help fires at this minute tick.
                 if is_awake:
                     awake_helps += 1
                     pity_counter += 1
@@ -238,6 +236,11 @@ class PokemonSleepSimulator:
                             banked_skills = min(2, banked_skills + 1)
                     else:
                         hit_cap_minute = minute - self.awake_mins
+
+                # Schedule the next help from the exact prior scheduled time,
+                # using the current energy at firing to determine the interval.
+                next_multiplier = self.get_speed_multiplier(energy)
+                next_help_minute = next_help_minute + self.final_freq * next_multiplier
 
             energy = max(0.0, energy - 0.1)
 
