@@ -1,404 +1,326 @@
+"""
+Pokémon Sleep Simulation Dashboard — Streamlit UI layer.
+"""
+
 import random
-import math
-import io
-import contextlib
-import plotly.express as px
-import pandas as pd
 import numpy as np
+import pandas as pd
+import plotly.express as px
+import plotly.graph_objects as go
 import streamlit as st
 
-# --- PAGE SETUP ---
-st.set_page_config(page_title="Pokémon Sleep Simulation Dashboard", layout="wide")
+from simulator import (
+    METRIC_LABELS,
+    POKEMON_DATA,
+    POKEMON_SPRITES,
+    RIBBON_TO_EXTRA_INV,
+    PokemonSleepSimulator,
+)
 
-# --- POKEMON BASE STATS & SPRITES ---
-POKEMON_DATA = {
-    "Wigglytuff": {"BASE_FREQ_MINS": 2750 / 60, "BASE_SKILL_RATE": 0.04,  "BASE_ING_RATE": 0.191, "BASE_INVENTORY": 32},
-    "Sylveon":    {"BASE_FREQ_MINS": 2600 / 60, "BASE_SKILL_RATE": 0.04,  "BASE_ING_RATE": 0.178, "BASE_INVENTORY": 20},
-    "Shuckle":    {"BASE_FREQ_MINS": 3600 / 60, "BASE_SKILL_RATE": 0.059, "BASE_ING_RATE": 0.205, "BASE_INVENTORY": 16},
-    "Pawmot":     {"BASE_FREQ_MINS": 2400 / 60, "BASE_SKILL_RATE": 0.039, "BASE_ING_RATE": 0.141, "BASE_INVENTORY": 28},
-    "Torterra":   {"BASE_FREQ_MINS": 2900 / 60, "BASE_SKILL_RATE": 0.048, "BASE_ING_RATE": 0.156, "BASE_INVENTORY": 27},
-    "Gardevoir":  {"BASE_FREQ_MINS": 2400 / 60, "BASE_SKILL_RATE": 0.042, "BASE_ING_RATE": 0.144, "BASE_INVENTORY": 28}
-}
+# --- PAGE SETUP ---------------------------------------------------------------
+st.set_page_config(page_title="Pokémon Sleep Simulation Dashboard", layout="wide", page_icon="😴")
 
-POKEMON_SPRITES = {
-    "Wigglytuff": "https://raw.githubusercontent.com/PokeAPI/sprites/master/sprites/pokemon/40.png",
-    "Sylveon":    "https://raw.githubusercontent.com/PokeAPI/sprites/master/sprites/pokemon/700.png",
-    "Shuckle":    "https://raw.githubusercontent.com/PokeAPI/sprites/master/sprites/pokemon/213.png",
-    "Pawmot":     "https://raw.githubusercontent.com/PokeAPI/sprites/master/sprites/pokemon/923.png",
-    "Torterra":   "https://raw.githubusercontent.com/PokeAPI/sprites/master/sprites/pokemon/389.png",
-    "Gardevoir":  "https://raw.githubusercontent.com/PokeAPI/sprites/master/sprites/pokemon/282.png"
-}
+st.markdown(
+    """
+<style>
+    .block-container { padding-top: 2rem; }
+    h1 { font-weight: 800; }
+    div[data-testid="stMetric"] {
+        background: rgba(135, 206, 235, 0.08);
+        border: 1px solid rgba(135, 206, 235, 0.25);
+        border-radius: 10px;
+        padding: 10px 14px;
+    }
+    div[data-testid="stExpander"] {
+        border-radius: 10px;
+    }
+</style>
+""",
+    unsafe_allow_html=True,
+)
 
-# --- SIMULATOR CLASS ---
-class PokemonSleepSimulator:
-    MAX_ENERGY = 150
-    SLEEP_CAP = 100
-    E4E_HEAL_AMOUNT = 18
+# --- CONSTANTS ----------------------------------------------------------------
+SUBSKILL_OPTIONS = ["STM", "STS", "HSM", "HSS", "HB", "IUL", "IUM", "IUS", "BFS"]
+NATURE_OPTIONS = ["MSC", "SOH", "ING", "ENG"]
 
-    def __init__(self, pokemon_name, level, subskills, nature, awake_hours=15.5,
-                 sleep_hours=8.5, extra_inv=0):
-        self.pokemon_name = pokemon_name
-        self.level = level
-        self.subskills = subskills
-        self.nature = nature
+HISTORY_COLUMNS = [
+    "ID", "Pokémon", "Level", "Subskills", "Nature", "Extra HB",
+    "Mean Triggers", "Awake Eff", "Sleep Eff", "Daily Eff",
+    "_level", "_subskills", "_nature_up", "_nature_down", "_extra_hb", "_extra_inv",
+]
 
-        self.awake_mins = round(awake_hours * 60)
-        self.sleep_mins = round(sleep_hours * 60)
-        self.total_mins = self.awake_mins + self.sleep_mins
 
-        if pokemon_name not in POKEMON_DATA:
-            raise ValueError(f"Pokemon '{pokemon_name}' not found in POKEMON_DATA.")
+# --- STANDALONE PLOTLY RENDER FUNCTIONS ----------------------------------------
+def render_distribution_charts(run_id, df, log):
+    """Total triggers, awake/sleep/daily efficiency, banked skills, inventory cap time."""
 
-        self.base_data = POKEMON_DATA[pokemon_name]
-
-        self.final_freq = 0.0
-        self.skill_rate = 0.0
-        self.ing_rate = 0.0
-        self.max_inv = 0
-        self.extra_inv = extra_inv
-        self.ing_pool = []
-        self.pity_threshold = 0
-        self.nature_energy = 1.0
-        self.berry_count = 1
-
-        self._apply_stats()
-
-    def _apply_stats(self):
-        base_freq_mins = self.base_data["BASE_FREQ_MINS"]
-        base_skill_rate = self.base_data["BASE_SKILL_RATE"]
-        base_ing_rate = self.base_data["BASE_ING_RATE"]
-        base_inventory = self.base_data["BASE_INVENTORY"]
-
-        skill_bonus = 0.0
-        speed_bonus = 0.0
-        inv_bonus = 0
-
-        nature_skill = 1.0
-        nature_speed = 1.0
-        nature_ing = 1.0
-        self.nature_energy = 1.0
-
-        if "STM" in self.subskills: skill_bonus += 0.36
-        if "STS" in self.subskills: skill_bonus += 0.18
-        if "HSM" in self.subskills: speed_bonus += 0.14
-        if "HSS" in self.subskills: speed_bonus += 0.07
-        if "HB" in self.subskills:  speed_bonus += 0.05
-        if "IUL" in self.subskills: inv_bonus += 18
-        if "IUM" in self.subskills: inv_bonus += 12
-        if "IUS" in self.subskills: inv_bonus += 6
-        if "BFS" in self.subskills: self.berry_count = 2
-
-        speed_bonus = min(0.35, speed_bonus)
-
-        if "MSC+" in self.nature: nature_skill = 1.2
-        if "MSC-" in self.nature: nature_skill = 0.8
-        if "SOH+" in self.nature: nature_speed = 0.9
-        if "SOH-" in self.nature: nature_speed = 1.075
-        if "ING+" in self.nature: nature_ing = 1.2
-        if "ING-" in self.nature: nature_ing = 0.8
-        if "ENG+" in self.nature: self.nature_energy = 1.2
-        if "ENG-" in self.nature: self.nature_energy = 0.8
-
-        level_time_mult = 1.0 - ((self.level - 1) * 0.002)
-
-        self.final_freq = base_freq_mins * level_time_mult * (1.0 - speed_bonus) * nature_speed
-        self.skill_rate = base_skill_rate * (1.0 + skill_bonus) * nature_skill
-        self.ing_rate = base_ing_rate * nature_ing
-        self.max_inv = base_inventory + inv_bonus + self.extra_inv
-
-        self.ing_pool = [1]
-        if self.level >= 30: self.ing_pool.append(2)
-        if self.level >= 60: self.ing_pool.append(4)
-
-        base_freq_sec = base_freq_mins * 60
-        self.pity_threshold = math.ceil(142000 / base_freq_sec)
-        self.effective_skill_heal = round(self.E4E_HEAL_AMOUNT * self.nature_energy)
-
-    @staticmethod
-    def get_speed_multiplier(energy):
-        if energy >= 81: return 0.45
-        elif energy >= 61: return 0.52
-        elif energy >= 41: return 0.62
-        elif energy >= 21: return 0.71
-        else: return 1.00
-
-    def simulate_day(self, start_energy, start_pity):
-        energy = start_energy
-        help_progress = 0.0
-        inventory = 0
-        hit_cap_minute = np.inf
-
-        awake_helps = 0
-        sleep_helps = 0
-        awake_skill_triggers = 0
-        banked_skills = 0
-        pity_counter = start_pity
-
-        for minute in range(self.total_mins):
-            is_awake = minute < self.awake_mins
-
-            if minute == self.awake_mins:
-                inventory = 0
-
-            multiplier = self.get_speed_multiplier(energy)
-            actual_freq = self.final_freq * multiplier
-            help_progress += 1.0 / actual_freq
-
-            if help_progress >= 1.0:
-                help_progress -= 1.0
-
-                if is_awake:
-                    awake_helps += 1
-                    pity_counter += 1
-
-                    if pity_counter >= self.pity_threshold or random.random() < self.skill_rate:
-                        pity_counter = 0
-                        awake_skill_triggers += 1
-                        energy = min(self.MAX_ENERGY, energy + self.effective_skill_heal)
-                else:
-                    sleep_helps += 1
-
-                    if inventory < self.max_inv:
-                        pity_counter += 1
-                        if random.random() < self.ing_rate:
-                            inventory += random.choice(self.ing_pool)
-                        else:
-                            inventory += self.berry_count
-
-                        if pity_counter >= self.pity_threshold or random.random() < self.skill_rate:
-                            pity_counter = 0
-                            banked_skills = min(2, banked_skills + 1)
-                    else:
-                            hit_cap_minute = minute - self.awake_mins
-
-            energy = max(0.0, energy - 0.1)
-
-        return {
-            "end_energy": energy,
-            "awake_helps": awake_helps,
-            "sleep_helps": sleep_helps,
-            "awake_skill_triggers": awake_skill_triggers,
-            "banked_skills": banked_skills,
-            "hit_cap_minute": hit_cap_minute,
-            "end_pity": pity_counter
-        }
-
-    def run(self, days=1000):
-        print(f"--- SIMULATION SETTINGS ({days} Days) ---")
-        print(f"Pokemon: {self.pokemon_name} | Level: {self.level}")
-        print(f"Subskills: {self.subskills} | Nature: {self.nature}")
-        print(f"Energy Nature Multiplier: {self.nature_energy}x")
-        print(f"Berry Drop: {self.berry_count} (BFS: {'Yes' if 'BFS' in self.subskills else 'No'})")
-        print(f"Calculated Freq: {self.final_freq:.2f} mins")
-        print(f"Calculated Skill Rate: {self.skill_rate*100:.2f}%")
-        print(f"Pity Threshold: {self.pity_threshold} helps")
-        print(f"Max Inventory: {self.max_inv}")
-
-        current_energy = 100
-        current_pity = 0
-        daily_results = []
-
-        for day in range(1, days + 1):
-            result = self.simulate_day(current_energy, current_pity)
-            current_pity = result["end_pity"]
-
-            daily_helps = result["awake_helps"] + result["sleep_helps"]
-            total_triggers = result["awake_skill_triggers"] + result["banked_skills"]
-
-            awake_eff = result["awake_helps"] / (self.awake_mins / self.final_freq)
-            sleep_eff = result["sleep_helps"] / (self.sleep_mins / self.final_freq)
-            daily_eff = daily_helps / (self.total_mins / self.final_freq)
-
-            daily_results.append({
-                "day": day,
-                "start_energy": current_energy,
-                "end_energy": result["end_energy"],
-                "awake_helps": result["awake_helps"],
-                "sleep_helps": result["sleep_helps"],
-                "daily_helps": daily_helps,
-                "awake_skill_triggers": result["awake_skill_triggers"],
-                "banked_skills": result["banked_skills"],
-                "total_triggers": total_triggers,
-                "awake_efficiency": awake_eff,
-                "sleep_efficiency": sleep_eff,
-                "daily_efficiency": daily_eff,
-                "hit_cap_minute": result["hit_cap_minute"]
-            })
-
-            sleep_heal = min(100, 100 * self.nature_energy)
-            morning_energy = min(self.SLEEP_CAP, result["end_energy"] + sleep_heal)
-            current_energy = min(self.MAX_ENERGY, morning_energy + (result["banked_skills"] * self.effective_skill_heal))
-
-        hit_cap_times = [result["hit_cap_minute"] for result in daily_results if result["hit_cap_minute"] != np.inf]
-        
-        if hit_cap_times:
-            med_time = np.median(hit_cap_times) * 60
-            hours, remainder = divmod(med_time, 3600)
-            minutes, seconds = divmod(remainder, 60)
-            print(f"Median Max Inventory Time: {int(hours):02d}:{int(minutes):02d}:{int(seconds):02d}")
-        else:
-            print("Median Max Inventory Time: --:--:--")
-
-        daily_banked_skills = np.array([result["banked_skills"] for result in daily_results])
-        values, counts = np.unique(daily_banked_skills, return_counts=True)
-        total_days = counts.sum()
-        banked_dict = dict(zip(values, counts))
-
-        print("--- Banked Skills Distribution ---")
-        for i in range(3):
-            count = banked_dict.get(i, 0)
-            pct = (count / total_days) * 100
-            print(f"{i} Banked Skills: {pct:>5.2f}%")
-        print("-" * 35 + "\n")
-
-        return pd.DataFrame(daily_results)
-
-# --- STANDALONE PLOTLY RENDER FUNCTION ---
-def render_plotly_charts(run_id, df):
-    """Generates an interactive Plotly dashboard for the simulation metrics natively in Streamlit."""
-    
-    # Row 1: Total Triggers & Awake Efficiency
     col1, col2 = st.columns(2)
-    
+
     with col1:
         data = df["total_triggers"].dropna()
         if not data.empty:
             counts = data.value_counts().sort_index().reset_index()
             counts.columns = ["Triggers", "Frequency"]
-            
-            fig1 = px.bar(counts, x="Triggers", y="Frequency", title="Total Triggers", 
-                          color_discrete_sequence=["#87CEEB"])
-            
+
+            fig = px.bar(
+                counts,
+                x="Triggers",
+                y="Frequency",
+                title="Total Skill Triggers per Day",
+                color_discrete_sequence=["#87CEEB"],
+            )
             mean_val = data.mean()
-            fig1.add_vline(x=mean_val, line_dash="dash", line_color="red", 
-                           annotation_text=f"Mean: {mean_val:.2f}", annotation_position="top right")
-            
-            fig1.update_layout(xaxis=dict(dtick=1)) # Force integers on x-axis
-            st.plotly_chart(fig1, use_container_width=True, key=f"bar_{run_id}")
+            fig.add_vline(
+                x=mean_val,
+                line_dash="dash",
+                line_color="red",
+                annotation_text=f"Mean: {mean_val:.2f}",
+                annotation_position="top right",
+            )
+            fig.update_layout(
+                xaxis=dict(dtick=1, title="Total Skill Triggers"),
+                yaxis=dict(title="Number of Days"),
+            )
+            st.plotly_chart(fig, key=f"bar_triggers_{run_id}")
 
     with col2:
         data = df["awake_efficiency"].dropna()
         if not data.empty:
-            fig2 = px.histogram(df, x="awake_efficiency", title="Awake Efficiency", 
-                                color_discrete_sequence=["#FA8072"], marginal="box", nbins=15)
-            st.plotly_chart(fig2,  key=f"hist_awake_{run_id}")
+            fig = px.histogram(
+                df,
+                x="awake_efficiency",
+                title="Awake Efficiency",
+                color_discrete_sequence=["#FA8072"],
+                marginal="box",
+                nbins=15,
+            )
+            fig.update_layout(
+                xaxis=dict(title="Awake Efficiency"),
+                yaxis=dict(title="Number of Days"),
+            )
+            st.plotly_chart(fig, key=f"hist_awake_{run_id}")
 
-    # Row 2: Sleep Efficiency & Daily Efficiency
     col3, col4 = st.columns(2)
 
     with col3:
         data = df["sleep_efficiency"].dropna()
         if not data.empty:
-            fig3 = px.histogram(df, x="sleep_efficiency", title="Sleep Efficiency", 
-                                color_discrete_sequence=["#3CB371"], marginal="box", nbins=15)
-            st.plotly_chart(fig3, key=f"hist_sleep_{run_id}")
+            fig = px.histogram(
+                df,
+                x="sleep_efficiency",
+                title="Sleep Efficiency",
+                color_discrete_sequence=["#3CB371"],
+                marginal="box",
+                nbins=15,
+            )
+            fig.update_layout(
+                xaxis=dict(title="Sleep Efficiency"),
+                yaxis=dict(title="Number of Days"),
+            )
+            st.plotly_chart(fig, key=f"hist_sleep_{run_id}")
 
     with col4:
         data = df["daily_efficiency"].dropna()
         if not data.empty:
-            fig4 = px.histogram(df, x="daily_efficiency", title="Daily Efficiency", 
-                                color_discrete_sequence=["#800080"], marginal="box", nbins=15)
-            st.plotly_chart(fig4, key=f"hist_daily_{run_id}")
+            fig = px.histogram(
+                df,
+                x="daily_efficiency",
+                title="Daily Efficiency",
+                color_discrete_sequence=["#800080"],
+                marginal="box",
+                nbins=15,
+            )
+            fig.update_layout(
+                xaxis=dict(title="Daily Efficiency"),
+                yaxis=dict(title="Number of Days"),
+            )
+            st.plotly_chart(fig, key=f"hist_daily_{run_id}")
 
-# --- 1. INITIALIZE SESSION STATE ---
-# Store summary stats for the data table
-if "history" not in st.session_state:
-    st.session_state.history = pd.DataFrame(columns=[
-        "ID", "Pokémon", "Mean Triggers", "Awake Eff", "Sleep Eff", "Daily Eff",
-        "_level", "_subskills", "_nature_up", "_nature_down"
-    ])
-# Dictionary mapping Run ID to its full raw DataFrame and logs
-if "history_data" not in st.session_state:
-    st.session_state.history_data = {}
+    # Row 3: Banked skills distribution + inventory cap time
+    col5, col6 = st.columns(2)
 
-if "run_count" not in st.session_state: st.session_state.run_count = 0
-if "ui_pokemon" not in st.session_state: st.session_state.ui_pokemon = "Wigglytuff"
-if "ui_level" not in st.session_state: st.session_state.ui_level = 50
-if "ui_subskills" not in st.session_state: st.session_state.ui_subskills = []
-if "ui_nature_up" not in st.session_state: st.session_state.ui_nature_up = None
-if "ui_nature_down" not in st.session_state: st.session_state.ui_nature_down = None
+    with col5:
+        banked_df = pd.DataFrame(log.get("banked_distribution", []))
+        if not banked_df.empty:
+            fig = px.bar(
+                banked_df,
+                x="banked_skills",
+                y="pct",
+                title="Banked (Sleep) Skill Triggers Distribution",
+                color_discrete_sequence=["#FFB347"],
+            )
+            fig.update_layout(
+                xaxis=dict(dtick=1, title="Banked Skill Triggers per Day"),
+                yaxis=dict(title="% of Days", ticksuffix="%"),
+            )
+            st.plotly_chart(fig, key=f"bar_banked_{run_id}")
+
+    with col6:
+        cap_data = df.loc[df["hit_cap_minute"] != float("inf"), "hit_cap_minute"]
+        if cap_data.empty:
+            st.markdown("**Time to Full Inventory (Sleep)**")
+            st.info("Inventory never hit max capacity on any simulated day — nothing to plot.")
+        else:
+            cap_hours = cap_data / 60.0
+            fig = px.histogram(
+                cap_hours,
+                title="Time to Full Inventory (Sleep)",
+                color_discrete_sequence=["#9370DB"],
+                marginal="box",
+                nbins=15,
+            )
+            fig.update_layout(
+                xaxis=dict(title="Hours into Sleep Phase Until Inventory Cap"),
+                yaxis=dict(title="Number of Days"),
+                showlegend=False,
+            )
+            st.plotly_chart(fig, key=f"hist_cap_{run_id}")
 
 
-# --- 2. CALLBACK FUNCTIONS ---
-def load_configuration(row):
-    st.session_state.ui_pokemon = row["Pokémon"]
-    st.session_state.ui_level = row["_level"]
-    st.session_state.ui_subskills = row["_subskills"]
-    st.session_state.ui_nature_up = row["_nature_up"]
-    st.session_state.ui_nature_down = row["_nature_down"]
-
-def delete_run(index, run_id):
-    st.session_state.history = st.session_state.history.drop(index).reset_index(drop=True)
-    if run_id in st.session_state.history_data:
-        del st.session_state.history_data[run_id]
+def render_settings_summary(log):
+    """Render the run's settings/log dict as a clean Markdown block instead of raw console text."""
+    settings = log.get("settings", {})
+    lines = [f"**{key}:** {value}\n" for key, value in settings.items()]
+    lines.append(
+        f"**Median Time to Full Inventory:** "
+        f"{log.get('median_cap_time') if log.get('median_cap_time') else '— (never hit cap)'}"
+    )
+    st.markdown("\n".join(lines))
 
 
-# --- 3. SIDEBAR INPUTS ---
-st.sidebar.title("Simulation Settings")
+def render_energy_percentile_chart(run_id, log):
+    """Energy over the day as a percentile fan chart (5-95 band, 25-75 band, median line)."""
+    energy_pct = pd.DataFrame(log.get("energy_percentiles", []))
+    if energy_pct.empty:
+        st.info("No energy trace data available for this run.")
+        return
 
-st.sidebar.markdown("### Pokémon")
-pokemon_name = st.sidebar.pills(
-    "Select Pokémon",
-    options=["Wigglytuff", "Sylveon", "Shuckle", "Pawmot", "Torterra", "Gardevoir"],
-    selection_mode="single",
-    key="ui_pokemon",
-    label_visibility="collapsed"
-)
+    hours = energy_pct["hour"]
+    hours_band = pd.concat([hours, hours[::-1]])
 
-if not pokemon_name: pokemon_name = "Wigglytuff"
+    fig = go.Figure()
 
-col_sprite, col_level = st.sidebar.columns([1, 2], vertical_alignment="center")
-with col_sprite: st.image(POKEMON_SPRITES[pokemon_name])
-with col_level: level = st.number_input("Level", min_value=1, max_value=100, key="ui_level")
+    # Outer band: 5th-95th percentile
+    fig.add_trace(
+        go.Scatter(
+            x=hours_band,
+            y=pd.concat([energy_pct["p95"], energy_pct["p5"][::-1]]),
+            fill="toself",
+            fillcolor="rgba(135,206,235,0.20)",
+            line=dict(color="rgba(255,255,255,0)"),
+            name="5th–95th percentile",
+            hoverinfo="skip",
+        )
+    )
 
-st.sidebar.divider()
+    # Inner band: 25th-75th percentile
+    fig.add_trace(
+        go.Scatter(
+            x=hours_band,
+            y=pd.concat([energy_pct["p75"], energy_pct["p25"][::-1]]),
+            fill="toself",
+            fillcolor="rgba(135,206,235,0.45)",
+            line=dict(color="rgba(255,255,255,0)"),
+            name="25th–75th percentile",
+            hoverinfo="skip",
+        )
+    )
 
-st.sidebar.markdown("### Subskills")
-subskills = st.sidebar.pills(
-    "Click to toggle subskills",
-    options=["STM", "STS", "HSM", "HSS", "HB", "IUL", "IUM", "IUS", "BFS"],
-    selection_mode="multi",
-    key="ui_subskills",
-    label_visibility="collapsed"
-)
+    # Median line
+    fig.add_trace(
+        go.Scatter(
+            x=hours,
+            y=energy_pct["p50"],
+            mode="lines",
+            line=dict(color="#1f77b4", width=2.5),
+            name="Median Energy",
+        )
+    )
 
-st.sidebar.markdown("### Nature")
-nature_up = st.sidebar.pills("Positive (+)", options=["MSC", "SOH", "ING", "ENG"], selection_mode="single", key="ui_nature_up")
-nature_down = st.sidebar.pills("Negative (-)", options=["MSC", "SOH", "ING", "ENG"], selection_mode="single", key="ui_nature_down")
+    fig.add_vline(
+        x=log.get("awake_hours"),
+        line_dash="dot",
+        line_color="gray",
+        annotation_text="Sleep starts",
+        annotation_position="top",
+    )
 
-st.sidebar.divider()
-col1, col2 = st.sidebar.columns([3,1], vertical_alignment="bottom")
+    fig.update_layout(
+        xaxis=dict(title="Hours Elapsed", dtick=2),
+        yaxis=dict(title="Energy"),
+        legend_title_text="",
+    )
+    st.plotly_chart(fig, key=f"energy_pct_{run_id}")
 
-days = col1.number_input("Simulation Days", min_value=10, max_value=1000, value=1000)
 
-if col2.button("Run", type="primary", use_container_width=True):
+# --- HELPER FUNCTIONS -----------------------------------------------------------
+def get_max_subskills(lvl: int) -> int:
+    if lvl >= 80:
+        return 5
+    if lvl >= 70:
+        return 4
+    if lvl >= 50:
+        return 3
+    if lvl >= 25:
+        return 2
+    if lvl >= 10:
+        return 1
+    return 0
+
+
+def build_nature_list(nature_up, nature_down):
+    if nature_up and nature_down and nature_up == nature_down:
+        return []
+
     nature_list = []
-    if nature_up: nature_list.append(f"{nature_up}+")
-    if nature_down: nature_list.append(f"{nature_down}-")
+    if nature_up:
+        nature_list.append(f"{nature_up}+")
+    if nature_down:
+        nature_list.append(f"{nature_down}-")
+    return nature_list
 
-    sim = PokemonSleepSimulator(pokemon_name, level, subskills, nature_list)
 
-    # Capture console prints from sim.run()
-    stdout_buffer = io.StringIO()
-    with contextlib.redirect_stdout(stdout_buffer):
-        df = sim.run(days=days)
-    simulation_logs = stdout_buffer.getvalue()
+def simulate_once(pokemon_name, level, subskills, nature_up, nature_down, days, extra_hb, ribbon_hours):
+    nature_list = build_nature_list(nature_up, nature_down)
+    extra_inv = RIBBON_TO_EXTRA_INV.get(ribbon_hours, 0)
 
-    # Increment ID
+    sim = PokemonSleepSimulator(
+        pokemon_name,
+        level,
+        subskills,
+        nature_list,
+        extra_hb=extra_hb,
+        extra_inv=extra_inv,
+    )
+    df, log = sim.run(days=days)
+    return df, log
+
+
+def append_run_result(
+    pokemon_name,
+    level,
+    subskills,
+    nature_up,
+    nature_down,
+    extra_hb,
+    ribbon_hours,
+    df,
+    log,
+):
     st.session_state.run_count += 1
     new_id = st.session_state.run_count
-    
-    # Store Raw DF & Logs in history_data dict mapped by ID
-    st.session_state.history_data[new_id] = {
-        "df": df,
-        "logs": simulation_logs,
-        "pokemon": pokemon_name
-    }
 
-    # Store Summary in history Dataframe
+    st.session_state.history_data[new_id] = {"df": df, "log": log, "pokemon": pokemon_name}
+
+    nature_list = build_nature_list(nature_up, nature_down)
+
     new_run = {
         "ID": new_id,
         "Pokémon": pokemon_name,
+        "Level": level,
+        "Subskills": ", ".join(subskills) if subskills else "None",
+        "Nature": ", ".join(nature_list) if nature_list else "None",
+        "Extra HB": extra_hb,
         "Mean Triggers": round(df["total_triggers"].mean(), 2),
         "Awake Eff": round(df["awake_efficiency"].mean(), 2),
         "Sleep Eff": round(df["sleep_efficiency"].mean(), 2),
@@ -406,81 +328,591 @@ if col2.button("Run", type="primary", use_container_width=True):
         "_level": level,
         "_subskills": subskills,
         "_nature_up": nature_up,
-        "_nature_down": nature_down
+        "_nature_down": nature_down,
+        "_extra_hb": extra_hb,
+        "_extra_inv": ribbon_hours,
     }
 
-    new_row = pd.DataFrame([new_run])
-    st.session_state.history = pd.concat([st.session_state.history, new_row], ignore_index=True)
+    st.session_state.history = pd.concat(
+        [st.session_state.history, pd.DataFrame([new_run])],
+        ignore_index=True,
+    )
 
 
-# --- 4. MAIN DASHBOARD ---
-st.title("Pokémon Sleep Simulation Dashboard")
-st.markdown("💡 **Tip:** Click any row in the history table below to view its charts, load its configuration, or delete it.")
+def sample_subskills_for_level(level: int, allowed_pool: list[str]) -> list[str]:
+    slots = get_max_subskills(level)
+    if slots <= 0 or not allowed_pool:
+        return []
+    return random.sample(allowed_pool, k=min(slots, len(allowed_pool)))
 
-st.subheader("📋 Simulation History & Comparison Log")
+
+def validate_random_inputs(level_min, level_max, subskill_pool):
+    if level_min > level_max:
+        return False, "Level min cannot be greater than level max."
+    if level_max >= 10 and len(subskill_pool) == 0:
+        return False, "Please select at least one subskill option (or keep max level below 10)."
+    return True, ""
+
+
+def run_randomized_batch(
+    n_runs: int,
+    pokemon_choice: str,
+    level_min: int,
+    level_max: int,
+    allowed_subskills: list[str],
+    allowed_nature_up: list[str],
+    allowed_nature_down: list[str],
+    days: int,
+    extra_hb_fixed: int = 0,
+    ribbon_hours_fixed: int = 0,
+):
+    progress = st.progress(0, text="Starting randomized runs...")
+    status = st.empty()
+
+    for i in range(n_runs):
+        lvl = random.randint(level_min, level_max)
+        subs = sample_subskills_for_level(lvl, allowed_subskills)
+
+        up = random.choice(allowed_nature_up) if allowed_nature_up else None
+        down_pool = [x for x in allowed_nature_down if x != up] if up else allowed_nature_down
+        down = random.choice(down_pool) if down_pool else None
+
+        df, log = simulate_once(
+            pokemon_name=pokemon_choice,
+            level=lvl,
+            subskills=subs,
+            nature_up=up,
+            nature_down=down,
+            days=days,
+            extra_hb=extra_hb_fixed,
+            ribbon_hours=ribbon_hours_fixed,
+        )
+
+        append_run_result(
+            pokemon_name=pokemon_choice,
+            level=lvl,
+            subskills=subs,
+            nature_up=up,
+            nature_down=down,
+            extra_hb=extra_hb_fixed,
+            ribbon_hours=ribbon_hours_fixed,
+            df=df,
+            log=log,
+        )
+
+        nature_list = build_nature_list(up, down)
+        nature_text = ", ".join(nature_list) if nature_list else "Neutral"
+        subskills_text = ", ".join(subs) if subs else "None"
+
+        # progress update
+        pct = int(((i + 1) / n_runs) * 100)
+        progress.progress(pct, text=f"Generating randomized runs... {i+1}/{n_runs}")
+        status.write(
+            f"Latest run: #{st.session_state.run_count} | "
+            f"Pokémon: {pokemon_choice} | "
+            f"Level: {lvl} | "
+            f"Subskills: {subskills_text} | "
+            f"Nature: {nature_text} | "
+        )
+
+    progress.progress(100, text="Done ✅")
+
+def format_equation(coeffs):
+    """coeffs: highest-degree-first, as returned by np.polyfit."""
+    degree = len(coeffs) - 1
+    terms = []
+    for i, c in enumerate(coeffs):
+        power = degree - i
+        if power == 0:
+            terms.append(f"{c:+.4g}")
+        elif power == 1:
+            terms.append(f"{c:+.4g}x")
+        else:
+            terms.append(f"{c:+.4g}x{'²' if power == 2 else f'^{power}'}")
+    return "y = " + " ".join(terms).lstrip("+").strip()
+
+
+# --- SESSION STATE --------------------------------------------------------------
+if "history" not in st.session_state:
+    st.session_state.history = pd.DataFrame(columns=HISTORY_COLUMNS)
+if "history_data" not in st.session_state:
+    st.session_state.history_data = {}
+if "run_count" not in st.session_state:
+    st.session_state.run_count = 0
+
+# Sidebar UI state
+if "ui_pokemon" not in st.session_state:
+    st.session_state.ui_pokemon = "Wigglytuff"
+if "ui_level" not in st.session_state:
+    st.session_state.ui_level = 50
+if "ui_subskills" not in st.session_state:
+    st.session_state.ui_subskills = []
+if "ui_nature_up" not in st.session_state:
+    st.session_state.ui_nature_up = None
+if "ui_nature_down" not in st.session_state:
+    st.session_state.ui_nature_down = None
+if "ui_extra_hb" not in st.session_state:
+    st.session_state.ui_extra_hb = 0
+if "ui_ribbon" not in st.session_state:
+    st.session_state.ui_ribbon = 0
+
+
+# --- CALLBACKS -----------------------------------------------------------------
+def load_configuration(row):
+    st.session_state.ui_pokemon = row["Pokémon"]
+    st.session_state.ui_level = row["_level"]
+    st.session_state.ui_subskills = row["_subskills"]
+    st.session_state.ui_nature_up = row["_nature_up"]
+    st.session_state.ui_nature_down = row["_nature_down"]
+    st.session_state.ui_extra_hb = row["_extra_hb"]
+    st.session_state.ui_ribbon = row["_extra_inv"]
+
+
+def delete_run(index, run_id):
+    st.session_state.history = st.session_state.history.drop(index).reset_index(drop=True)
+    if run_id in st.session_state.history_data:
+        del st.session_state.history_data[run_id]
+
+
+def enforce_max_subskills():
+    selected = st.session_state.get("ui_subskills", [])
+    current_level = st.session_state.get("ui_level", 1)
+    allowed = get_max_subskills(current_level)
+    if len(selected) > allowed:
+        st.session_state.ui_subskills = selected[:allowed]
+        st.toast(f"⚠️ Level {current_level} allows maximum {allowed} subskills!")
+
+def reset_all_history():
+    st.session_state.history = pd.DataFrame(columns=HISTORY_COLUMNS)
+    st.session_state.history_data = {}
+    st.session_state.run_count = 0
+
+# --- SIDEBAR INPUTS -------------------------------------------------------------
+st.sidebar.title("⚙️ Simulation Settings")
+
+st.sidebar.markdown("### Pokémon")
+pokemon_name = st.sidebar.pills(
+    "Select Pokémon",
+    options=list(POKEMON_DATA.keys()),
+    selection_mode="single",
+    key="ui_pokemon",
+    label_visibility="collapsed",
+)
+if not pokemon_name:
+    pokemon_name = "Wigglytuff"
+
+col_sprite, col_level = st.sidebar.columns([1, 2], vertical_alignment="center")
+with col_sprite:
+    st.image(POKEMON_SPRITES[pokemon_name])
+with col_level:
+    level = st.number_input("Level", min_value=1, max_value=100, key="ui_level")
+
+max_allowed = get_max_subskills(level)
+
+if len(st.session_state.get("ui_subskills", [])) > max_allowed:
+    st.session_state.ui_subskills = st.session_state.ui_subskills[:max_allowed]
+
+st.sidebar.divider()
+st.sidebar.markdown(f"### Subskills ({len(st.session_state.ui_subskills)}/{max_allowed} Unlocked)")
+
+if max_allowed == 0:
+    st.sidebar.info("🔒 Subskills unlock starting at Level 10.")
+else:
+    st.sidebar.pills(
+        "Click to toggle subskills",
+        options=SUBSKILL_OPTIONS,
+        selection_mode="multi",
+        key="ui_subskills",
+        on_change=enforce_max_subskills,
+        label_visibility="collapsed",
+    )
+
+# Always safe
+subskills = st.session_state.get("ui_subskills", [])
+
+col_label, col_input = st.sidebar.columns([1, 1], vertical_alignment="center")
+with col_label:
+    st.markdown("**Extra HB**", help="Each teammate with Helping Bonus adds +5% speed (max 4).")
+with col_input:
+    extra_hb = st.number_input(
+        "Extra HB",
+        min_value=0,
+        max_value=4,
+        key="ui_extra_hb",
+        label_visibility="collapsed",
+    )
+
+st.sidebar.divider()
+st.sidebar.markdown("### Nature")
+nature_up = st.sidebar.pills(
+    "Positive (+)",
+    options=NATURE_OPTIONS,
+    selection_mode="single",
+    key="ui_nature_up",
+)
+nature_down = st.sidebar.pills(
+    "Negative (-)",
+    options=NATURE_OPTIONS,
+    selection_mode="single",
+    key="ui_nature_down",
+)
+
+st.sidebar.divider()
+st.sidebar.markdown("### Sleep Ribbon")
+ribbon_choice = st.sidebar.pills(
+    "Total Sleep Hours Ribbon",
+    options=list(RIBBON_TO_EXTRA_INV.keys()),
+    format_func=lambda h: f"{h:,}h",
+    selection_mode="single",
+    key="ui_ribbon",
+    help="Ribbon milestones grant bonus max-inventory slots: 0h→+0, 200h→+1, 500h→+3, 1000h→+6, 2000h→+8.",
+)
+
+st.sidebar.divider()
+col1, col2 = st.sidebar.columns([3, 1], vertical_alignment="bottom")
+days = col1.number_input("Simulation Days", min_value=10, max_value=10000, value=1000)
+
+if col2.button("Run", type="primary"):
+    df, log = simulate_once(
+        pokemon_name=pokemon_name,
+        level=level,
+        subskills=subskills,
+        nature_up=nature_up,
+        nature_down=nature_down,
+        days=days,
+        extra_hb=extra_hb,
+        ribbon_hours=ribbon_choice,
+    )
+
+    append_run_result(
+        pokemon_name=pokemon_name,
+        level=level,
+        subskills=subskills,
+        nature_up=nature_up,
+        nature_down=nature_down,
+        extra_hb=extra_hb,
+        ribbon_hours=ribbon_choice,
+        df=df,
+        log=log,
+    )
+
+
+# --- MAIN DASHBOARD -------------------------------------------------------------
+st.title("😴 Pokémon Sleep Simulation Dashboard")
+
+with st.expander("🎲 Randomized Runs Generator", expanded=False):
+    st.caption("Generate multiple randomized configurations in one click.")
+
+    c1, c2 = st.columns([1, 2])
+    with c1:
+        rand_n_runs = st.number_input(
+            "Number of randomized runs",
+            min_value=1,
+            max_value=50,
+            value=20,
+            step=1,
+            key="rand_n_runs",
+        )
+        rand_pokemon = st.selectbox(
+            "Pokémon",
+            options=list(POKEMON_DATA.keys()),
+            index=0,
+            key="rand_pokemon",
+        )
+        rand_days = st.number_input(
+            "Simulation days per run",
+            min_value=10,
+            max_value=10000,
+            value=1000,
+            step=10,
+            key="rand_days",
+        )
+
+    with c2:
+        lvl_col1, lvl_col2 = st.columns(2)
+        with lvl_col1:
+            rand_level_min = st.number_input(
+                "Level min",
+                min_value=1,
+                max_value=st.session_state.get("rand_level_max", 100),  # cannot exceed max
+                value=min(st.session_state.get("rand_level_min", 30), st.session_state.get("rand_level_max", 100)),
+                step=1,
+                key="rand_level_min",
+            )
+
+        with lvl_col2:
+            rand_level_max = st.number_input(
+                "Level max",
+                min_value=st.session_state.get("rand_level_min", 1),    
+                max_value=100,
+                value=max(st.session_state.get("rand_level_max", 70), st.session_state.get("rand_level_min", 1)),
+                step=1,
+                key="rand_level_max",
+            )
+
+        rand_subskills_pool = st.multiselect(
+            "Subskill options (random pool)",
+            options=SUBSKILL_OPTIONS,
+            default=SUBSKILL_OPTIONS,
+            key="rand_subskills_pool",
+            help="Each run samples unique subskills from this pool based on unlocked slots at that level.",
+        )
+
+        nat_col1, nat_col2 = st.columns(2)
+        with nat_col1:
+            rand_nature_up_pool = st.multiselect(
+                "Nature (+) options",
+                options=NATURE_OPTIONS,
+                default=NATURE_OPTIONS,
+                key="rand_nature_up_pool",
+            )
+        with nat_col2:
+            rand_nature_down_pool = st.multiselect(
+                "Nature (-) options",
+                options=NATURE_OPTIONS,
+                default=NATURE_OPTIONS,
+                key="rand_nature_down_pool",
+            )
+
+        extra_col1, extra_col2 = st.columns(2)
+        with extra_col1:
+            rand_extra_hb = st.number_input(
+                "Fixed Extra HB",
+                min_value=0,
+                max_value=4,
+                value=0,
+                step=1,
+                key="rand_extra_hb",
+            )
+        with extra_col2:
+            rand_ribbon = st.selectbox(
+                "Fixed Sleep Ribbon (hours)",
+                options=list(RIBBON_TO_EXTRA_INV.keys()),
+                format_func=lambda h: f"{h:,}h",
+                index=0,
+                key="rand_ribbon",
+            )
+
+    if st.button("Generate Randomized Runs", type="primary", key="btn_generate_randomized_runs"):
+        ok, msg = validate_random_inputs(rand_level_min, rand_level_max, rand_subskills_pool)
+        if not ok:
+            st.error(msg)
+        else:
+            run_randomized_batch(
+                n_runs=int(rand_n_runs),
+                pokemon_choice=rand_pokemon,
+                level_min=int(rand_level_min),
+                level_max=int(rand_level_max),
+                allowed_subskills=rand_subskills_pool,
+                allowed_nature_up=rand_nature_up_pool,
+                allowed_nature_down=rand_nature_down_pool,
+                days=int(rand_days),
+                extra_hb_fixed=int(rand_extra_hb),
+                ribbon_hours_fixed=int(rand_ribbon),
+            )
+            st.success(f"Generated {int(rand_n_runs)} randomized runs for {rand_pokemon}.")
+            st.rerun()
+
+top_left, top_right = st.columns([4, 1], vertical_alignment="bottom")
+with top_left:
+    st.subheader("📋 Simulation History & Comparison Log")
+with top_right:
+    if st.button("🧹 Reset History", type="secondary"):
+        reset_all_history()
+        st.success("All history cleared.")
+        st.rerun()
+st.caption("Click any row to view its charts, load its configuration, or delete it.")
 
 if not st.session_state.history.empty:
-    # Display the interactive dataframe
     event = st.dataframe(
         st.session_state.history,
-        use_container_width=True,
         hide_index=True,
         on_select="rerun",
         selection_mode="single-row",
         column_config={
+            "ID": None,
             "_level": None,
             "_subskills": None,
             "_nature_up": None,
             "_nature_down": None,
+            "_extra_hb": None,
+            "_extra_inv": None,
             "Mean Triggers": st.column_config.NumberColumn(format="%.2f"),
             "Awake Eff": st.column_config.NumberColumn(format="%.2f"),
             "Sleep Eff": st.column_config.NumberColumn(format="%.2f"),
             "Daily Eff": st.column_config.NumberColumn(format="%.2f"),
-        }
+        },
     )
 
-    # Determine which run to show details/plots for
-    active_row_idx = None
-    if len(event.selection.rows) > 0:
-        active_row_idx = event.selection.rows[0]
-    
-    # If a row is selected in the UI, grab that row. Otherwise, just use the latest row (the bottom one) to show its charts
-    active_row = st.session_state.history.iloc[active_row_idx] if active_row_idx is not None else st.session_state.history.iloc[-1]
+    active_row_idx = event.selection.rows[0] if len(event.selection.rows) > 0 else None
+    active_row = (
+        st.session_state.history.iloc[active_row_idx]
+        if active_row_idx is not None
+        else st.session_state.history.iloc[-1]
+    )
     active_id = active_row["ID"]
 
-    # If the user actually clicked the row, show them the config action buttons
     if active_row_idx is not None:
         with st.container(border=True):
-            up_text = f"{active_row['_nature_up']}+" if active_row['_nature_up'] else "None"
-            down_text = f"{active_row['_nature_down']}-" if active_row['_nature_down'] else "None"
-            sub_text = ', '.join(active_row['_subskills']) if active_row['_subskills'] else 'None'
-
-
-            st.markdown(f"""
-            **Pokemon:** {pokemon_name} | **Level:** {active_row['_level']} | **Nature:** {up_text} / {down_text} | **Subskills:** {sub_text}
-            """)
-
             col1, col2 = st.columns([1, 1])
             with col1:
                 st.button("🔄 Load Configuration", on_click=load_configuration, args=(active_row,))
             with col2:
-                st.button("🗑️ Delete Configuration", type="primary", on_click=delete_run, args=(active_row_idx, active_id))
+                st.button(
+                    "🗑️ Delete Configuration",
+                    type="primary",
+                    on_click=delete_run,
+                    args=(active_row_idx, active_id),
+                )
 
-    # --- 5. DYNAMIC PLOTTING & DETAILS AREA ---
     st.divider()
-    st.subheader(f"📊 Details for Run #{active_id} ({active_row['Pokémon']})")
-    
-    # Fetch the dynamically saved DataFrame & logs
-    if active_id in st.session_state.history_data:
-        run_data = st.session_state.history_data[active_id]
 
-        # 1. Show the Console logs
-        with st.expander("📜 Console Logs", expanded=True):
-            st.text(run_data["logs"])
-            
-        # 2. Render the Plotly charts cleanly in the Streamlit columns
-        render_plotly_charts(active_id, run_data["df"])
+    main_view = st.segmented_control(
+        "View Mode",
+        options=["📊 Details", "🔀 Compare Runs"],
+        default="📊 Details",
+        label_visibility="collapsed",
+    )
+
+    if main_view == "📊 Details":
+        if active_id in st.session_state.history_data:
+            run_data = st.session_state.history_data[active_id]
+            st.subheader(f"Run #{active_id}")
+            tab_overview, tab_charts, tab_energy = st.tabs(
+                ["🧾 Pokemon Stats", "📈 Distributions", "🔋 Energy"]
+            )
+
+            with tab_overview:
+                render_settings_summary(run_data["log"])
+            with tab_charts:
+                render_distribution_charts(active_id, run_data["df"], run_data["log"])
+            with tab_energy:
+                render_energy_percentile_chart(active_id, run_data["log"])
+
+    elif main_view == "🔀 Compare Runs":
+        st.subheader("Efficiency vs. Skill Triggers — All Saved Runs")
+        st.markdown(
+            "Each point is one saved run, averaged across its simulated days. "
+            "Fitted lines show the trend across runs for awake/sleep/daily efficiency."
+        )
+
+        EFFICIENCY_METRICS = ["awake_efficiency", "sleep_efficiency", "daily_efficiency"]
+        METRIC_COLORS = {
+            "awake_efficiency": "#FA8072",
+            "sleep_efficiency": "#3CB371",
+            "daily_efficiency": "#800080",
+        }
         
+        fit_type = st.radio("Trend line fit", ["Linear", "Quadratic"], horizontal=True, key="fit_type")
+        fit_degree = 1 if fit_type == "Linear" else 2
 
+        run_points = []
+        history_by_id = st.session_state.history.set_index("ID", drop=False)
+
+        for rid, run_data_i in st.session_state.history_data.items():
+            run_df = run_data_i["df"]
+            if run_df.empty:
+                continue
+
+            run_label = f"#{rid} · {run_data_i['pokemon']}"
+            mean_triggers = run_df["total_triggers"].mean()
+
+            # metadata from saved history table (always present)
+            if rid in history_by_id.index:
+                row = history_by_id.loc[rid]
+                level_val = row["Level"]
+                subskills_val = row["Subskills"]
+                nature_val = row["Nature"]
+                extra_hb_val = row["Extra HB"]
+            else:
+                level_val = "N/A"
+                subskills_val = "N/A"
+                nature_val = "N/A"
+                extra_hb_val = "N/A"
+
+            for metric in EFFICIENCY_METRICS:
+                run_points.append(
+                    {
+                        "Run": run_label,
+                        "pokemon": run_data_i["pokemon"],
+                        "level": level_val,
+                        "subskills": subskills_val,
+                        "nature": nature_val,
+                        "extra_hb": extra_hb_val,
+                        "total_triggers": run_df["total_triggers"].mean(),
+                        "metric": metric,
+                        "value": run_df[metric].mean(),
+                    }
+                )
+
+        if not run_points:
+            st.info("No runs available yet.")
+        else:
+            points_df = pd.DataFrame(run_points)
+            fig = go.Figure()
+
+            for metric in EFFICIENCY_METRICS:
+                label = METRIC_LABELS.get(metric, metric)
+                color = METRIC_COLORS.get(metric)
+                metric_df = points_df[points_df["metric"] == metric]
+
+                fig.add_trace(
+                    go.Scatter(
+                        x=metric_df["total_triggers"],
+                        y=metric_df["value"],
+                        mode="markers",
+                        name=label,
+                        marker=dict(size=10, color=color),
+                        customdata=metric_df[["Run", "pokemon", "level", "subskills", "nature", "extra_hb"]].values,
+                        hovertemplate=(
+                            "<b>%{customdata[0]}</b><br>"
+                            "Pokémon: %{customdata[1]}<br>"
+                            "Level: %{customdata[2]}<br>"
+                            "Subskills: %{customdata[3]}<br>"
+                            "Nature: %{customdata[4]}<br>"
+                            "Extra HB: %{customdata[5]}<br>"
+                            "Triggers: %{x:.2f}<br>"
+                            "Efficiency: %{y:.3f}"
+                            "<extra></extra>"
+                        ),
+                    )
+                )
+
+
+                n_unique = metric_df["total_triggers"].nunique()
+                if n_unique >= fit_degree + 1:
+                    coeffs = np.polyfit(metric_df["total_triggers"], metric_df["value"], fit_degree)
+                    x_fit = np.linspace(metric_df["total_triggers"].min(), metric_df["total_triggers"].max(), 50)
+                    y_fit = np.polyval(coeffs, x_fit)
+
+                    fig.add_trace(
+                        go.Scatter(
+                            x=x_fit,
+                            y=y_fit,
+                            mode="lines",
+                            name=f"{label} trend",
+                            line=dict(color=color, dash="dash"),
+                            hoverinfo="skip",
+                        )
+                    )
+
+                    fig.add_annotation(
+                        x=x_fit[-1],
+                        y=y_fit[-1],
+                        text=format_equation(coeffs),
+                        showarrow=False,
+                        xanchor="left",
+                        yshift=4,
+                        font=dict(color=color, size=11),
+                    )
+
+            fig.update_layout(
+                title="Efficiency vs. Total Skill Triggers",
+                xaxis=dict(title=METRIC_LABELS.get("total_triggers", "Total Skill Triggers")),
+                yaxis=dict(title="Efficiency"),
+                legend_title_text="Metric (click to hide/show)",
+                margin=dict(r=140),
+            )
+            st.plotly_chart(fig, key="compare_efficiency_vs_triggers")
 else:
-    st.info("No simulations run yet. Use the sidebar settings and click 'Run Simulation' to start!")
+    st.info("No simulations run yet. Use the sidebar settings and click 'Run' to start!")
