@@ -41,7 +41,7 @@ st.markdown(
 
 # --- CONSTANTS ----------------------------------------------------------------
 SUBSKILL_OPTIONS = ["STM", "STS", "HSM", "HSS", "HB", "IUL", "IUM", "IUS", "BFS"]
-NATURE_OPTIONS = ["MSC", "SOH", "ING", "ENG"]
+NATURE_OPTIONS = ["MSC", "SOH", "ING", "ENG", "EXP"]
 
 HISTORY_COLUMNS = [
     "ID", "Pokémon", "Level", "Subskills", "Nature", "Extra HB",
@@ -606,7 +606,7 @@ ribbon_choice = st.sidebar.pills(
 
 st.sidebar.divider()
 col1, col2 = st.sidebar.columns([3, 1], vertical_alignment="bottom")
-days = col1.number_input("Simulation Days", min_value=10, max_value=1000, value=1000)
+days = col1.number_input("Simulation Days", min_value=100, max_value=1000, value=10000)
 
 if col2.button("Run", type="primary"):
     df, log = simulate_once(
@@ -657,8 +657,8 @@ with st.expander("🎲 Randomized Runs Generator", expanded=False):
         )
         rand_days = st.number_input(
             "Simulation days per run",
-            min_value=10,
-            max_value=1000,
+            min_value=100,
+            max_value=10000,
             value=1000,
             step=10,
             key="rand_days",
