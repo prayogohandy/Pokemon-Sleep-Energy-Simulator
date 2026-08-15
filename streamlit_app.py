@@ -249,6 +249,13 @@ def render_energy_percentile_chart(run_id, log):
         xaxis=dict(title="Hours Elapsed", dtick=2),
         yaxis=dict(title="Energy"),
         legend_title_text="",
+        legend=dict(
+                    orientation="h",   # Make the legend horizontal
+                    yanchor="top",     # Anchor the top of the legend box
+                    y=-0.2,            # Push it below the x-axis (0 is the bottom of the chart)
+                    xanchor="center",  # Anchor the middle of the legend box
+                    x=0.5              # Center it horizontally
+                )
     )
     st.plotly_chart(fig, key=f"energy_pct_{run_id}")
 
@@ -912,6 +919,13 @@ if not st.session_state.history.empty:
                 yaxis=dict(title="Efficiency"),
                 legend_title_text="Metric (click to hide/show)",
                 margin=dict(r=140),
+                legend=dict(
+                    orientation="h",   # Make the legend horizontal
+                    yanchor="top",     # Anchor the top of the legend box
+                    y=-0.2,            # Push it below the x-axis (0 is the bottom of the chart)
+                    xanchor="center",  # Anchor the middle of the legend box
+                    x=0.5              # Center it horizontally
+                )
             )
             st.plotly_chart(fig, key="compare_efficiency_vs_triggers")
 else:
