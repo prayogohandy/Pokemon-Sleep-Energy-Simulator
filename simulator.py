@@ -94,6 +94,7 @@ class PokemonSleepSimulator:
         self.ing_pool = []
         self.pity_threshold = 0
         self.nature_energy = 1.0
+        self.sleep_energy_mult = 1.0
         self.berry_count = 1
         self.effective_skill_heal = 0
 
@@ -126,7 +127,9 @@ class PokemonSleepSimulator:
         if "BFS" in self.subskills: self.berry_count = 2
         if "IFM" in self.subskills: ing_bonus += 0.36
         if "IFS" in self.subskills: ing_bonus += 0.18
-        if "ERB" in self.subskills: self.SLEEP_CAP = 105
+        if "ERB" in self.subskills: 
+            self.SLEEP_CAP = 105
+            self.sleep_energy_mult = 1.14
 
         speed_bonus += self.extra_hb * 0.05
         speed_bonus = min(0.35, speed_bonus)
@@ -351,7 +354,7 @@ class PokemonSleepSimulator:
                 "hit_cap_minute": result["hit_cap_minute"],
             })
 
-            sleep_heal = min(100, 100 * self.nature_energy)
+            sleep_heal = min(100, 100 * self.nature_energy * self.sleep_energy_mult)
             morning_energy = min(self.SLEEP_CAP, result["end_energy"] + sleep_heal)
             current_energy = min(self.MAX_ENERGY, morning_energy + (result["banked_skills"] * self.effective_skill_heal))
 
