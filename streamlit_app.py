@@ -40,7 +40,9 @@ st.markdown(
 )
 
 # --- CONSTANTS ----------------------------------------------------------------
-SUBSKILL_OPTIONS = ["STM", "STS", "HSM", "HSS", "HB", "IUL", "IUM", "IUS", "BFS"]
+SUBSKILL_OPTIONS = ["STM", "STS", "HSM", "HSS", "HB", "IUL", "IUM", "IUS", 
+                    "BFS", "IFM", "IFS", "ERB"]
+SUBSKILL_USELESS_OPTIONS = ["SXB", "RXB", "DSB", "SLUM", "SLUS"]
 NATURE_OPTIONS = ["MSC", "SOH", "ING", "ENG", "EXP"]
 
 HISTORY_COLUMNS = [
@@ -606,7 +608,7 @@ ribbon_choice = st.sidebar.pills(
 
 st.sidebar.divider()
 col1, col2 = st.sidebar.columns([3, 1], vertical_alignment="bottom")
-days = col1.number_input("Simulation Days", min_value=100, max_value=1000, value=10000)
+days = col1.number_input("Simulation Days", min_value=100, max_value=10000, value=1000)
 
 if col2.button("Run", type="primary"):
     df, log = simulate_once(
@@ -686,26 +688,40 @@ with st.expander("🎲 Randomized Runs Generator", expanded=False):
                 key="rand_level_max",
             )
 
-        rand_subskills_pool = st.multiselect(
-            "Subskill options (random pool)",
+        rand_subskills_pool = st.pills(
+            "Subskills options",
             options=SUBSKILL_OPTIONS,
             default=SUBSKILL_OPTIONS,
-            key="rand_subskills_pool",
-            help="Each run samples unique subskills from this pool based on unlocked slots at that level.",
+            selection_mode="multi",
+            key="rand_subskills_pool_normal",
+            help="Normal subskills to be included for randomized runs.",
         )
+
+        rand_subskills_useless_pool = st.pills(
+            "Useless subskills options",
+            options=SUBSKILL_USELESS_OPTIONS,
+            default=SUBSKILL_USELESS_OPTIONS,
+            selection_mode="multi",
+            key="rand_subskills_pool_useless",
+            help="Useless subskills to be included for randomized runs.",
+        )
+
+        rand_subskills_pool = (rand_subskills_pool or []) + (rand_subskills_useless_pool or [])
 
         nat_col1, nat_col2 = st.columns(2)
         with nat_col1:
-            rand_nature_up_pool = st.multiselect(
+            rand_nature_up_pool = st.pills(
                 "Nature (+) options",
                 options=NATURE_OPTIONS,
+                selection_mode="multi",
                 default=NATURE_OPTIONS,
                 key="rand_nature_up_pool",
             )
         with nat_col2:
-            rand_nature_down_pool = st.multiselect(
+            rand_nature_down_pool = st.pills(
                 "Nature (-) options",
                 options=NATURE_OPTIONS,
+                selection_mode="multi",
                 default=NATURE_OPTIONS,
                 key="rand_nature_down_pool",
             )

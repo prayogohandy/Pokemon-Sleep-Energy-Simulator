@@ -107,6 +107,7 @@ class PokemonSleepSimulator:
 
         skill_bonus = 0.0
         speed_bonus = 0.0
+        ing_bonus = 0.0
         inv_bonus = 0
 
         nature_skill = 1.0
@@ -123,6 +124,9 @@ class PokemonSleepSimulator:
         if "IUM" in self.subskills: inv_bonus += 12
         if "IUS" in self.subskills: inv_bonus += 6
         if "BFS" in self.subskills: self.berry_count = 2
+        if "IFM" in self.subskills: ing_bonus += 0.36
+        if "IFS" in self.subskills: ing_bonus += 0.18
+        if "ERB" in self.subskills: self.SLEEP_CAP = 105
 
         speed_bonus += self.extra_hb * 0.05
         speed_bonus = min(0.35, speed_bonus)
@@ -140,7 +144,7 @@ class PokemonSleepSimulator:
 
         self.final_freq = base_freq_mins * level_time_mult * (1.0 - speed_bonus) * nature_speed
         self.skill_rate = base_skill_rate * (1.0 + skill_bonus) * nature_skill
-        self.ing_rate = base_ing_rate * nature_ing
+        self.ing_rate = base_ing_rate * (1.0 + ing_bonus) * nature_ing
         self.max_inv = base_inventory + inv_bonus + self.extra_inv
 
         self.ing_pool = [1]
