@@ -183,6 +183,8 @@ def render_settings_summary(log):
     """Render the run's settings/log dict as a clean Markdown block instead of raw console text."""
     settings = log.get("settings", {})
     lines = [f"**{key}:** {value}\n" for key, value in settings.items()]
+    lines.append(f"**Average Daily Helps:** {log['avg_daily_helps']:.2f}\n")
+    lines.append(f"**Average Help Frequency:** {log['avg_help_freq_mins']}\n")
     lines.append(
         f"**Median Time to Full Inventory:** "
         f"{log.get('median_cap_time') if log.get('median_cap_time') else '— (never hit cap)'}"

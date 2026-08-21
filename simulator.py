@@ -389,9 +389,20 @@ class PokemonSleepSimulator:
                 row[f"p{mark}"] = values[i]
             energy_percentiles.append(row)
 
+        # Calculate daily averages
+        avg_daily_helps = sum(r["daily_helps"] for r in daily_results) / days
+        avg_help_freq_mins = self.total_mins / avg_daily_helps if avg_daily_helps > 0 else 0
+        if avg_help_freq_mins:
+            help_mins = avg_help_freq_mins * 60
+            hours, remainder = divmod(help_mins, 3600)
+            minutes, seconds = divmod(remainder, 60)
+            help_mins_formatted = f"{int(hours):02d}:{int(minutes):02d}:{int(seconds):02d}"
+
         log = {
             "settings": settings,
             "median_cap_time": median_cap_time,
+            "avg_daily_helps": avg_daily_helps,       
+            "avg_help_freq_mins": help_mins_formatted,      
             "banked_distribution": banked_distribution,
             "awake_hours": self.awake_mins / 60.0,
             "total_hours": self.total_mins / 60.0,
